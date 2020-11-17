@@ -29,6 +29,7 @@ import java.util.HashSet;
 import java.util.Locale;
 import java.util.Set;
 import org.jboss.galleon.util.IoUtils;
+import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
@@ -92,12 +93,14 @@ public class DevWatchContextTestCase {
 
     @Before
     public void init() throws Exception {
-        // Recreate a watcher before each test to avoid
-        // events to be mixed (Windows platform).
+        watcher = FileSystems.getDefault().newWatchService();
+    }
+
+    @After
+    public void closeWatcher() throws IOException {
         if (watcher != null) {
             watcher.close();
         }
-        watcher = FileSystems.getDefault().newWatchService();
     }
 
     private static boolean isWindows() {

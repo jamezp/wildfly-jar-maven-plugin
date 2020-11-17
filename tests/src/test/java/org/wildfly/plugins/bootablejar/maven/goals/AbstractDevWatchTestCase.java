@@ -21,8 +21,12 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
+
 import org.jboss.as.controller.client.ModelControllerClient;
 
 import org.wildfly.plugin.core.ServerHelper;
@@ -41,7 +45,7 @@ public abstract class AbstractDevWatchTestCase extends AbstractBootableJarMojoTe
 
     private Exception processException;
     private Process process;
-    private Integer retCode;
+    private int retCode;
     private Path pomFile;
     private Thread goalThread;
     private Path logFile;
@@ -75,13 +79,18 @@ public abstract class AbstractDevWatchTestCase extends AbstractBootableJarMojoTe
                     // the clasloading context switch from AppClassloader to Maven RealmClass and all is reloaded without delegation
                     // breaking fully the loading env.
 
+                    final Map<String, String> env = new HashMap<>();
+
                     // CI has a different executable path.
-                    Boolean isCI = Boolean.getBoolean("org.wildfly.bootable.jar.ci.execution");
+                    final boolean isCI = Boolean.getBoolean("org.wildfly.bootable.jar.ci.execution");
                     List<String> cmd = new ArrayList<>();
                     if (isWindows()) {
                         if (isCI) {
                             cmd.add("C:\\Program Files\\PowerShell\\7\\pwsh.EXE");
+                            cmd.add("-NonInteractive");
                             cmd.add("-command ");
+                        } else {
+                            env.put("NOPAUSE", "true");
                         }
                         cmd.add("mvn.cmd");
                     } else {
@@ -98,11 +107,21 @@ public abstract class AbstractDevWatchTestCase extends AbstractBootableJarMojoTe
                     if (parent != null && Files.notExists(parent)) {
                         Files.createDirectories(parent);
                     }
-                    process = new ProcessBuilder(cmd).redirectErrorStream(true)
-                            .redirectOutput(logFile.toFile()).start();
-                    int r = process.waitFor();
-                    if (r != 0) {
-                        retCode = r;
+                    final ProcessBuilder builder =  new ProcessBuilder(cmd)
+                            .redirectErrorStream(true)
+                            .redirectOutput(logFile.toFile());
+                    builder.environment().putAll(env);
+
+                    final Process process = builder.start();
+                    AbstractDevWatchTestCase.this.process = process;
+                    final long timeout = TestEnvironment.getTimeout() * 5;
+                    if (!process.waitFor(timeout, TimeUnit.SECONDS)) {
+                        process.destroyForcibly();
+                        processException = new RuntimeException(String.format("The process did not end withing %d seconds", timeout));
+                    }
+                    final int exitValue = process.exitValue();
+                    if (exitValue != 0) {
+                        retCode = exitValue;
                     }
                 } catch (Exception ex) {
                     ex.printStackTrace();
@@ -136,7 +155,7 @@ public abstract class AbstractDevWatchTestCase extends AbstractBootableJarMojoTe
     public void shutdownServer() throws Exception {
         super.shutdownServer();
         if (process != null) {
-            if (retCode != null) {
+            if (retCode != 0) {
                 Exception ex = new Exception("dev-watch goal process not running although it should. Return code " + retCode);
                 if (processException != null) {
                     ex.addSuppressed(processException);
@@ -144,7 +163,7 @@ public abstract class AbstractDevWatchTestCase extends AbstractBootableJarMojoTe
                 throw ex;
             }
 
-            process.destroy();
+            process.destroyForcibly();
             goalThread.join();
             if (processException != null) {
                 throw processException;
